@@ -183,8 +183,13 @@ DEATH
     elsif ( $arg eq '--quiet' ) {
       $attr{quiet} = 1;
     }
+  <<<<<<< versioned
+    elsif ( $arg eq '--versioned' ) {
+      $opts{versioned} = 1;
+  =======
     elsif ( $arg eq '--always' ) {
       $attr{always} = 1;
+  >>>>>>> master
     }
     elsif ( $arg =~ /^--/ ) {
       die "Unknown import argument: $arg";
@@ -227,8 +232,10 @@ sub inc { $_[0]->{inc}     ||= \@INC }
 sub libs { $_[0]->{libs}   ||= [ \'PERL5LIB' ] }
 sub bins { $_[0]->{bins}   ||= [ \'PATH' ] }
 sub roots { $_[0]->{roots} ||= [ \'PERL_LOCAL_LIB_ROOT' ] }
+sub versioned { $_[0]->{versioned} ||= [ \'PERL_LOCAL_LIB_VER' ] }
 sub extra { $_[0]->{extra} ||= {} }
 sub quiet { $_[0]->{quiet} }
+sub no_create { $_[0]->{no_create} }
 
 sub _as_list {
   my $list = shift;
@@ -246,6 +253,15 @@ sub _remove_from {
   my %remove = map { $_ => 1 } @remove;
   grep !$remove{$_}, _as_list($list);
 }
+sub _remove_matching_from {
+  my ($list, $match, @remove) = @_;
+  return @$list
+    if !@remove;
+  my %remove = map { $_ => 1 } @remove;
+  my @match = _as_list($match);
+  my @list = _as_list($list);
+  map { defined $match[$_] && $remove{$match[$_]} ? () : $list[$_] } 0 .. $#list;
+}
 
 my @_lib_subdirs = (
   [$_version, $_archname],
@@ -258,6 +274,10 @@ my @_lib_subdirs = (
 sub install_base_bin_path {
   my ($class, $path) = @_;
   return _catdir($path, 'bin');
+}
+sub install_base_bin_versioned_path {
+  my ($class, $path) = @_;
+  return File::Spec->catdir($path, 'bin', $_version);
 }
 sub install_base_perl_path {
   my ($class, $path) = @_;
@@ -299,6 +319,40 @@ sub installer_options_for {
   );
 }
 
+sub installer_versioned_options_for {
+  my ($class, $path) = @_;
+  if (!defined $path) {
+    return (
+      PERL_MM_OPT => undef,
+      PERL_MB_OPT => undef,
+    );
+  }
+  my $lib = File::Spec->catdir(
+    $class->install_base_perl_path($path),
+    $_version,
+  );
+  my %mm;
+  my %mb;
+  $mm{SITELIB}      = $mb{lib}    = $lib;
+  $mm{SITEARCH}     = $mb{arch}   = File::Spec->catdir($lib, $Config{archname});
+  $mm{SITEBIN}      = $mb{bin}    =
+  $mm{SITESCRIPT}   = $mb{script} = $class->install_base_bin_versioned_path($path);
+  $mm{SITEMAN1DIR}  = $mm{SITEMAN3DIR} = 'none';
+  $mb{bindoc}       = $mb{libdoc} = '';
+
+  return (
+    PERL_MM_OPT => join(' ',
+      INSTALLDIRS => 'site',
+      map { "INSTALL$_="._mm_escape_path($mm{$_}) }
+      sort keys %mm
+    ),
+    PERL_MB_OPT => join(' ',
+      map { "--install_path $_="._mb_escape_path($mb{$_}) }
+      sort keys %mb
+    ),
+  );
+}
+
 sub active_paths {
   my ($self) = @_;
   $self = ref $self ? $self : $self->new;
@@ -326,15 +380,20 @@ sub deactivate {
 
   my %args = (
     bins  => [ _remove_from($self->bins,
-      $self->install_base_bin_path($path)) ],
+      $self->install_base_bin_path($path),
+      $self->install_base_bin_versioned_path($path),
+    ) ],
     libs  => [ _remove_from($self->libs,
-      $self->install_base_perl_path($path)) ],
+      $self->lib_paths_for($path)) ],
     inc   => [ _remove_from($self->inc,
       $self->lib_paths_for($path)) ],
     roots => [ _remove_from($self->roots, $path) ],
+    versioned => [ _remove_matching_from($self->versioned, $self->roots, $path) ],
   );
 
-  $args{extra} = { $self->installer_options_for($args{roots}[0]) };
+  my $extra_method = $args{versioned}[0] ? 'installer_versioned_options_for'
+                                         : 'installer_options_for';
+  $args{extra} = { $self->$extra_method($args{roots}[0]) };
 
   $self->clone(%args);
 }
@@ -349,12 +408,17 @@ sub deactivate_all {
   if (@active_lls) {
     %args = (
       bins => [ _remove_from($self->bins,
-        map $self->install_base_bin_path($_), @active_lls) ],
+        map +(
+          $self->install_base_bin_path($_),
+          $self->install_base_bin_versioned_path($_),
+        ), @active_lls
+      ) ],
       libs => [ _remove_from($self->libs,
-        map $self->install_base_perl_path($_), @active_lls) ],
+        map $self->lib_paths_for($_), @active_lls) ],
       inc => [ _remove_from($self->inc,
         map $self->lib_paths_for($_), @active_lls) ],
-      roots => [ _remove_from($self->roots, @active_lls) ],
+      roots => [],
+      versioned => [],
     );
   }
 
@@ -379,17 +443,23 @@ sub activate {
     $self = $self->deactivate($path);
   }
 
+  my $versioned = $opts->{versioned} ? 1 : 0;
+  my $bin_method = $versioned ? 'install_base_bin_versioned_path'
+                              : 'install_base_bin_path';
   my %args;
   if ($opts->{always} || !@active_lls || $active_lls[0] ne $path) {
     %args = (
-      bins  => [ $self->install_base_bin_path($path), @{$self->bins} ],
+      bins  => [ $self->$bin_method($path), @{$self->bins} ],
       libs  => [ $self->install_base_perl_path($path), @{$self->libs} ],
       inc   => [ $self->lib_paths_for($path), @{$self->inc} ],
+      versioned => [ $versioned, @{$self->versioned} ],
       roots => [ $path, @{$self->roots} ],
     );
   }
 
-  $args{extra} = { $self->installer_options_for($path) };
+  my $extra_method = $versioned ? 'installer_versioned_options_for'
+                                : 'installer_options_for';
+  $args{extra} = { $self->$extra_method($path) };
 
   $self->clone(%args);
 }
@@ -423,6 +493,7 @@ sub build_environment_vars {
     PATH                => join($_path_sep, _as_list($self->bins)),
     PERL5LIB            => join($_path_sep, _as_list($self->libs)),
     PERL_LOCAL_LIB_ROOT => join($_path_sep, _as_list($self->roots)),
+    PERL_LOCAL_LIB_VER  => join($_path_sep, _as_list($self->versioned)),
     %{$self->extra},
   );
 }
@@ -479,6 +550,7 @@ sub environment_vars_string {
     PATH                => $self->bins,
     PERL5LIB            => $self->libs,
     PERL_LOCAL_LIB_ROOT => $self->roots,
+    PERL_LOCAL_LIB_VER  => $self->versioned,
     map { $_ => $extra->{$_} } sort keys %$extra,
   );
   $self->_build_env_string($shelltype, \@envs);
@@ -1003,6 +1075,8 @@ values:
 
 =item PERL_LOCAL_LIB_ROOT
 
+=item PERL_LOCAL_LIB_VER
+
 =back
 
 When possible, these will be appended to instead of overwritten entirely.
@@ -1050,6 +1124,11 @@ C<cmd>, or C<powershell>.
 
 Prevents C<local::lib> from creating directories when activating dirs.  This is
 likely to cause issues on Win32 systems.
+
+=head2 --versioned
+
+Installs modules into a subdirectory based on the perl version.  This prevents
+binary incompatible perls from trying to use the modules that were installed.
 
 =head1 CLASS METHODS
 
