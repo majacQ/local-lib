@@ -1,5 +1,15 @@
 Revision history for local::lib
 
+2.000_025 - 2020-07-30
+ - add documentation for --quiet option
+ - added --always option to always add requested directory to env vars, even
+   if they are already included
+ - improve shell test to be more resiliant against custom init scripts
+ - improved test diagnostics
+ - reorganized documentation for bootstrapping into a non-standard directory
+ - remove mentions of File::HomeDir from documentation, as it is no longer
+   used
+
 2.000024 - 2017-10-08
  - be compatible with CPAN.pm 1.82 to 1.86_51 during bootstrap process
 

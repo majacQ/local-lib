@@ -10,8 +10,8 @@ BEGIN {
 }
 use Config ();
 
-our $VERSION = '2.000024';
-$VERSION = eval $VERSION;
+our $VERSION = '2.000_025';
+$VERSION =~ tr/_//d;
 
 BEGIN {
   *_WIN32 = ($^O eq 'MSWin32' || $^O eq 'NetWare' || $^O eq 'symbian')
@@ -183,8 +183,13 @@ DEATH
     elsif ( $arg eq '--quiet' ) {
       $attr{quiet} = 1;
     }
+  <<<<<<< versioned
     elsif ( $arg eq '--versioned' ) {
       $opts{versioned} = 1;
+  =======
+    elsif ( $arg eq '--always' ) {
+      $attr{always} = 1;
+  >>>>>>> master
     }
     elsif ( $arg =~ /^--/ ) {
       die "Unknown import argument: $arg";
@@ -887,11 +892,6 @@ Run this:
 If the system asks you whether it should automatically configure as much
 as possible, you would typically answer yes.
 
-In order to install local::lib into a directory other than the default, you need
-to specify the name of the directory when you call bootstrap, as follows:
-
-  perl Makefile.PL --bootstrap=~/foo
-
 =item 3.
 
 Run this: (local::lib assumes you have make installed on your system)
@@ -909,22 +909,29 @@ way:
 
 If you are using C shell, you can do this as follows:
 
+  % echo $SHELL
   /bin/csh
-  echo $SHELL
-  /bin/csh
-  echo 'eval `perl -I$HOME/perl5/lib/perl5 -Mlocal::lib`' >> ~/.cshrc
-
-If you passed to bootstrap a directory other than default, you also need to
-give that as import parameter to the call of the local::lib module like this
-way:
-
-  echo 'eval "$(perl -I$HOME/foo/lib/perl5 -Mlocal::lib=$HOME/foo)"' >>~/.bashrc
+  $ echo 'eval `perl -I$HOME/perl5/lib/perl5 -Mlocal::lib`' >> ~/.cshrc
 
 After writing your shell configuration file, be sure to re-read it to get the
 changed settings into your current shell's environment. Bourne shells use
 C<. ~/.bashrc> for this, whereas C shells use C<source ~/.cshrc>.
 
 =back
+
+=head3 Bootstrapping into an alternate directory
+
+In order to install local::lib into a directory other than the default, you need
+to specify the name of the directory when you call bootstrap.  Then, when
+setting up the environment variables, both perl and local::lib must be told the
+location of the bootstrap directory.  The setup process would look as follows:
+
+  perl Makefile.PL --bootstrap=~/foo
+  make test && make install
+  echo 'eval "$(perl -I$HOME/foo/lib/perl5 -Mlocal::lib=$HOME/foo)"' >>~/.bashrc
+  . ~/.bashrc
+
+=head3 Other bootstrapping options
 
 If you're on a slower machine, or are operating under draconian disk space
 limitations, you can disable the automatic generation of manpages from POD when
@@ -1098,6 +1105,15 @@ was added by C<local::lib>, instead of adding it.
 Remove all directories that were added to search paths by C<local::lib> from the
 search paths.
 
+=head2 --quiet
+
+Don't output any messages about directories being created.
+
+=head2 --always
+
+Always add directories to environment variables, ignoring if they are already
+included.
+
 =head2 --shelltype
 
 Specify the shell type to use for output.  By default, the shell will be
@@ -1259,8 +1275,8 @@ installation. Defaults to C<~/perl5>.
 
 =back
 
-Attempts to find the user's home directory. If installed, uses C<File::HomeDir>
-for this purpose. If no definite answer is available, throws an exception.
+Attempts to find the user's home directory.
+If no definite answer is available, throws an exception.
 
 =head2 resolve_relative_path
 
