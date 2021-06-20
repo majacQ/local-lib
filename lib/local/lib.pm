@@ -7,6 +7,7 @@ use Config;
 our $VERSION = '2.000015';
 $VERSION = eval $VERSION;
 
+  <<<<<<< bootstrap-config
 BEGIN {
   *_WIN32 = ($^O eq 'MSWin32' || $^O eq 'NetWare' || $^O eq 'symbian')
     ? sub(){1} : sub(){0};
@@ -51,6 +52,11 @@ sub _cwd {
   $cwd =~ s/$_DIR_SPLIT?$/$_DIR_JOIN/;
   $cwd;
 }
+  =======
+use File::Spec ();
+use File::Path ();
+use Config;
+  >>>>>>> multiple-perls-doc
 
 sub _catdir {
   if (_USE_FSPEC) {
@@ -293,7 +299,45 @@ sub deactivate {
 
   $args{extra} = { $self->installer_options_for($args{roots}[0]) };
 
+  <<<<<<< bootstrap-config
   $self->clone(%args);
+  =======
+sub resolve_home_path {
+  my ($class, $path) = @_;
+  return $path unless ($path =~ /^~/);
+  my ($user) = ($path =~ /^~([^\/]+)/); # can assume ^~ so undef for 'us'
+  my $tried_file_homedir;
+  my $homedir = do {
+    if (eval { require File::HomeDir } && $File::HomeDir::VERSION >= 0.65) {
+      $tried_file_homedir = 1;
+      if (defined $user) {
+        File::HomeDir->users_home($user);
+      } else {
+        File::HomeDir->my_home;
+      }
+    } else {
+      if (defined $user) {
+        (getpwnam $user)[7];
+      } else {
+        if (defined $ENV{HOME}) {
+          $ENV{HOME};
+        } else {
+          (getpwuid $<)[7];
+        }
+      }
+    }
+  };
+  unless (defined $homedir) {
+    require Carp;
+    Carp::croak(
+      "Couldn't resolve homedir for "
+      .(defined $user ? $user : 'current user')
+      .($tried_file_homedir ? '' : ' - consider installing File::HomeDir')
+    );
+  }
+  $path =~ s/^~[^\/]*/$homedir/;
+  $path;
+  >>>>>>> multiple-perls-doc
 }
 
 sub deactivate_all {
@@ -493,6 +537,7 @@ sub build_csh_env_declaration {
     $out .= qq{if ! \$?$name setenv $name '';\n};
   }
 
+  <<<<<<< bootstrap-config
   my $value_without = $value;
   if ($value_without =~ s/(?:^|$_path_sep)\$\{$name\}(?:$_path_sep|$)//g) {
     $out .= qq{if "\${$name}" != '' setenv $name "$value";\n};
@@ -500,6 +545,74 @@ sub build_csh_env_declaration {
   }
   $out .= qq{setenv $name "$value_without";\n};
   return $out;
+  =======
+# Build an environment value for a variable like PATH from a list of paths.
+# References to existing variables are given as references to the variable name.
+# Duplicates are removed.
+#
+# options:
+# - interpolate: INTERPOLATE_ENV/LITERAL_ENV
+# - exists: paths are included only if they exist (default: interpolate == INTERPOLATE_ENV)
+# - filter: function to apply to each path do decide if it must be included
+# - empty: the value to return in the case of empty value
+my %ENV_LIST_VALUE_DEFAULTS = (
+    interpolate => INTERPOLATE_ENV,
+    exists => undef,
+    filter => sub { 1 },
+    empty => undef,
+);
+sub _env_list_value(%@) {
+  my $options = shift;
+  die(sprintf "unknown option '$_' at %s line %u\n", (caller)[1..2])
+    for grep { !exists $ENV_LIST_VALUE_DEFAULTS{$_} } keys %$options;
+  my %options = (%ENV_LIST_VALUE_DEFAULTS, %{ $options });
+  $options{exists} = $options{interpolate} == INTERPOLATE_ENV
+    unless defined $options{exists};
+
+  my %seen;
+
+  my $value = join($Config{path_sep}, map {
+      ref $_ ? ($^O eq 'MSWin32' ? "%${$_}%" : "\$${$_}") : $_
+    } grep {
+      ref $_ || (defined $_
+                 && length($_) > 0
+                 && !$seen{$_}++
+                 && $options{filter}->($_)
+                 && (!$options{exists} || -e $_))
+    } map {
+      if (ref $_ eq 'SCALAR' && $options{interpolate} == INTERPOLATE_ENV) {
+        exists $ENV{${$_}} ? (split /\Q$Config{path_sep}/, $ENV{${$_}}) : ()
+      } else {
+        $_
+      }
+    } @_);
+  return length($value) ? $value : $options{empty};
+}
+
+sub build_activate_environment_vars_for {
+  my ($class, $path, $interpolate) = @_;
+  return (
+    PERL_LOCAL_LIB_ROOT =>
+            _env_list_value(
+              { interpolate => $interpolate, exists => 0, empty => '' },
+              \'PERL_LOCAL_LIB_ROOT',
+              $path,
+            ),
+    PERL_MB_OPT => "--install_base ${path}",
+    PERL_MM_OPT => "INSTALL_BASE=${path}",
+    PERL5LIB =>
+            _env_list_value(
+              { interpolate => $interpolate, exists => 0, empty => '' },
+              $class->install_base_arch_path($path),
+              $class->install_base_perl_path($path),
+              \'PERL5LIB',
+            ),
+    PATH => _env_list_value(
+              { interpolate => $interpolate, exists => 0, empty => '' },
+              \'PATH',
+            ),
+  )
+  >>>>>>> multiple-perls-doc
 }
 
 sub build_cmd_env_declaration {
@@ -527,6 +640,7 @@ sub build_powershell_env_declaration {
     return qq{Remove-Item -ErrorAction 0 Env:\\$name;\n};
   }
 
+  <<<<<<< bootstrap-config
   my $maybe_path_sep = qq{\$(if("\$env:$name"-eq""){""}else{"$_path_sep"})};
   $value =~ s/(^|\G|$_path_sep)\$env:$name$_path_sep/$1\$env:$name"+$maybe_path_sep+"/g;
   $value =~ s/$_path_sep\$env:$name$/"+$maybe_path_sep+\$env:$name+"/;
@@ -536,6 +650,47 @@ sub build_powershell_env_declaration {
 sub wrap_powershell_output {
   my ($class, $out) = @_;
   return $out || " \n";
+  =======
+  my $perl_path = $class->install_base_perl_path($path);
+  my $arch_path = $class->install_base_arch_path($path);
+  my $bin_path = $class->install_base_bin_path($path);
+
+
+  my %env = (
+    PERL_LOCAL_LIB_ROOT => _env_list_value(
+      {
+        exists => 0,
+      },
+      grep { $_ ne $path } @active_lls
+    ),
+    PERL5LIB => _env_list_value(
+      {
+        exists => 0,
+        filter => sub {
+          $_ ne $perl_path && $_ ne $arch_path
+        },
+      },
+      \'PERL5LIB',
+    ),
+    PATH => _env_list_value(
+      {
+        exists => 0,
+        filter => sub { $_ ne $bin_path },
+      },
+      \'PATH',
+    ),
+  );
+
+  # If removing ourselves from the "top of the stack", set install paths to
+  # correspond with the new top of stack.
+  if ($active_lls[-1] eq $path) {
+    my $new_top = $active_lls[-2];
+    $env{PERL_MB_OPT} = defined($new_top) ? "--install_base ${new_top}" : undef;
+    $env{PERL_MM_OPT} = defined($new_top) ? "INSTALL_BASE=${new_top}" : undef;
+  }
+
+  return %env;
+  >>>>>>> multiple-perls-doc
 }
 
 sub build_fish_env_declaration {
@@ -548,6 +703,7 @@ sub build_fish_env_declaration {
   qq{set -x $name $value;\n};
 }
 
+  <<<<<<< bootstrap-config
 sub _interpolate {
   my ($class, $args, $var_pat, $escape, $escape_pat) = @_;
   return
@@ -585,6 +741,39 @@ sub pipeline {
 
 sub resolve_path {
   my ($class, $path) = @_;
+  =======
+  my %perl_paths = map { (
+      $class->install_base_perl_path($_) => 1,
+      $class->install_base_arch_path($_) => 1
+    ) } @active_lls;
+  my %bin_paths = map { (
+      $class->install_base_bin_path($_) => 1,
+    ) } @active_lls;
+
+  my %env = (
+    PERL_LOCAL_LIB_ROOT => undef,
+    PERL_MM_OPT => undef,
+    PERL_MB_OPT => undef,
+    PERL5LIB => _env_list_value(
+      {
+        exists => 0,
+        filter => sub {
+          ! scalar grep { exists $perl_paths{$_} } $_[0]
+        },
+      },
+      \'PERL5LIB'
+    ),
+    PATH => _env_list_value(
+      {
+        exists => 0,
+        filter => sub {
+          ! scalar grep { exists $bin_paths{$_} } $_[0]
+        },
+      },
+      \'PATH'
+    ),
+  );
+  >>>>>>> multiple-perls-doc
 
   $path = $class->${pipeline qw(
     resolve_relative_path
@@ -758,9 +947,19 @@ to specify the name of the directory when you call bootstrap, as follows:
 
   perl Makefile.PL --bootstrap=~/foo
 
+  <<<<<<< bootstrap-config
 =item 3.
 
 Run this: (local::lib assumes you have make installed on your system)
+  =======
+If you're using multiple versions of perl via something like
+L<perlbrew>, it might be useful to bootstrap to a specific directory
+for the current version of perl you're running:
+
+  perl Makefile.PL --bootstrap=$HOME/perl5/$(perl -e 'print $]')
+
+3. Run this: (local::lib assumes you have make installed on your system)
+  >>>>>>> multiple-perls-doc
 
   make test && make install
 
@@ -785,6 +984,12 @@ give that as import parameter to the call of the local::lib module like this
 way:
 
   echo 'eval "$(perl -I$HOME/foo/lib/perl5 -Mlocal::lib=$HOME/foo)"' >>~/.bashrc
+
+If you used the perl-version-specific bootstrap before, you'll need:
+
+  echo "eval $(perl -Mlocal::lib=$HOME/perl5/$(perl -e 'print $]'))" >>~/.bashrc
+
+Make sure you re-eval C<.bashrc> every time you switch perls.
 
 After writing your shell configuration file, be sure to re-read it to get the
 changed settings into your current shell's environment. Bourne shells use
@@ -875,12 +1080,70 @@ the user under "Documents and Settings" (Windows XP or earlier) or "Users"
 directory is translated to a short name (which means the directory must exist)
 and the subdirectories are created.
 
+  <<<<<<< bootstrap-config
 =head3 PowerShell
 
 local::lib also supports PowerShell, and can be used with the
 C<Invoke-Expression> cmdlet.
 
   Invoke-Expression "$(perl -Mlocal::lib)"
+  =======
+=head2 Some bash script magic
+
+Usually you set up separate local::lib destinations for different projects.
+So either you need to remember to run
+C<< `eval $(perl -Mlocal::lib=~/llib/project)` >>
+each time you start working on project foo, or you add this line to your
+scripts:
+
+  use local::lib '~/llib/project';
+
+Instead of doing this, you could load some magic bash script via C<< ~/.bashrc >>:
+
+  [[ -s $HOME/.local-lib.bash ]] && source $HOME/.local-lib.bash
+
+Content of C<< $HOME/.local-lib.bash >>:
+
+  #!/usr/bin/env bash
+  cd() {
+    builtin cd "$@"
+    local cwd ; cwd=$(pwd)
+    unset PERL5LIB
+    if [[ -f "$cwd/.llrc" ]] ; then
+      eval $(perl -Mlocal::lib=`cat $cwd/.llrc`)
+    else
+      if [[ -f "~/.llrc" ]] ; then
+        eval $(perl -Mlocal::lib=`cat ~/.llrc`)
+      else
+        eval $(perl -Mlocal::lib)
+      fi
+    fi
+  }
+
+So you just drop a C<< .llrc >> into all of your projects folders containing the
+destination of your local::lib directory for the project. You can also create
+the file C<< .llrc >> in your home directory and put a default local::lib
+destination in there.
+
+See it in action:
+
+  ~# cat .llrc
+  ~/perl5/locallib/default
+
+  ~# cat Development/OpenSource/perl-beetle/.llrc
+  ~/perl5/locallib/perl-beetle
+
+  ~# env | grep PERL5
+  PERL5LIB=/Users/plu/perl5/locallib/default/lib/perl5/darwin-2level:/Users/plu/perl5/locallib/default/lib/perl5
+
+  ~# cd Development/OpenSource/perl-beetle/
+  ~/Development/OpenSource/perl-beetle# env | grep PERL5
+  PERL5LIB=/Users/plu/perl5/locallib/perl-beetle/lib/perl5/darwin-2level:/Users/plu/perl5/locallib/perl-beetle/lib/perl5
+
+  ~/Development/OpenSource/perl-beetle# cd
+  ~# env | grep PERL5
+  PERL5LIB=/Users/plu/perl5/locallib/default/lib/perl5/darwin-2level:/Users/plu/perl5/locallib/default/lib/perl5
+  >>>>>>> multiple-perls-doc
 
 =head1 RATIONALE
 
@@ -1431,11 +1694,15 @@ patches contributed by Breno G. de Oliveira <garu@cpan.org>.
 Improvements to stacking multiple local::lib dirs and removing them from the
 environment later on contributed by Andrew Rodland <arodland@cpan.org>.
 
+  <<<<<<< bootstrap-config
 Patch for Carp version mismatch contributed by Hakim Cassimally
 <osfameron@cpan.org>.
 
 Rewrite of internals and numerous bug fixes and added features contributed by
 Graham Knop <haarg@haarg.org>.
+  =======
+Patch for Carp version mismatch contributed by Hakim Cassimally <osfameron@cpan.org>.
+  >>>>>>> multiple-perls-doc
 
 =head1 COPYRIGHT
 
